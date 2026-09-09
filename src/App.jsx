@@ -63,6 +63,24 @@ function Dashboard({ onNavigate, onDeleteExpense }) {
   if (budgetPercent > 90) budgetWarningColor = 'text-red-500'
   else if (budgetPercent > 75) budgetWarningColor = 'text-orange-500'
 
+  const remaining = budgetLimit - monthlyTotal
+  const isOverBudget = remaining < 0
+  const today = new Date()
+  const daysInMonth = new Date(
+    today.getFullYear(),
+    today.getMonth() + 1,
+    0
+  ).getDate()
+  const daysLeft = Math.max(daysInMonth - today.getDate() + 1, 1)
+  const dailySafe = remaining > 0 ? remaining / daysLeft : 0
+
+  const remainingDotColor =
+    budgetPercent > 90
+      ? 'bg-red-500'
+      : budgetPercent > 75
+      ? 'bg-orange-500'
+      : 'bg-green-500'
+
   return (
     <div className="min-h-screen flex justify-center font-sans text-gray-900">
       <div className="w-full max-w-md relative pb-24">
@@ -113,6 +131,31 @@ function Dashboard({ onNavigate, onDeleteExpense }) {
             )}
           </motion.div>
         </div>
+
+        {budgetLimit > 0 && (
+          <div className="px-6 mt-3">
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, delay: 0.4 }}
+              className="bg-white rounded-full border border-gray-100 shadow-sm px-4 py-2.5 flex items-center justify-between text-sm"
+            >
+              <span className="flex items-center gap-2 font-medium text-gray-900">
+                <span
+                  className={`w-2 h-2 rounded-full inline-block ${remainingDotColor}`}
+                />
+                {isOverBudget
+                  ? `${formatCurrency(Math.abs(remaining))} over budget`
+                  : `${formatCurrency(remaining)} left`}
+              </span>
+              <span className="text-gray-400 text-xs">
+                {isOverBudget
+                  ? `${budgetPercent.toFixed(0)}% used`
+                  : `~${formatCurrency(dailySafe)} / day`}
+              </span>
+            </motion.div>
+          </div>
+        )}
 
         <div className="px-6 flex justify-center mt-6 relative z-10">
           <motion.button
