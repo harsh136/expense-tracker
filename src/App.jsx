@@ -1,17 +1,29 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Settings, X } from 'lucide-react'
+import { Plus, Settings, X, Search, ArrowRight, Undo2 } from 'lucide-react'
 
 import { useLocalStorage } from './hooks/useLocalStorage'
 import {
   formatCurrency,
   generateId,
   filterExpensesByTimeframe,
+  filterExpensesBySearch,
   getMonthlyTotal,
+  getPaceStats,
+  getCategoryMonthTotals,
+  detectRecurring,
+  normalizeCategory,
+  CATEGORIES,
+  QUICK_AMOUNTS,
+  toCSV,
+  downloadFile,
+  parseBackup,
 } from './utils/helpers'
 
 import SpendingHeatmap from './components/SpendingHeatmap'
 import SpendingChart from './components/SpendingChart'
+import CategoryBudgets from './components/CategoryBudgets'
+import { ProjectedBanner, RecurringCard } from './components/BudgetInsights'
 import ConfirmModal from './components/ConfirmModal'
 import Dropdown from './components/Dropdown'
 import ExpenseList from './components/ExpenseList'
@@ -38,22 +50,33 @@ const slideVariants = {
   }),
 }
 
-function Dashboard({ onNavigate, onDeleteExpense }) {
-  const [expenses] = useLocalStorage('syncSpend_expenses', [])
+function Dashboard({ onNavigate, onDeleteExpense, onEditExpense }) {
+  const [expenses, setExpenses] = useLocalStorage('syncSpend_expenses', [])
   const [settings] = useLocalStorage('syncSpend_settings', { budget: 0 })
   const [timeframe, setTimeframe] = useState('month')
+  const [search, setSearch] = useState('')
+
+  const categoryLimits = settings.categoryLimits || {}
 
   const filteredExpenses = useMemo(
     () => filterExpensesByTimeframe(expenses, timeframe),
     [expenses, timeframe]
   )
 
+  const searchedExpenses = useMemo(
+    () => filterExpensesBySearch(filteredExpenses, search),
+    [filteredExpenses, search]
+  )
+
   const totalSpent = useMemo(
-    () => filteredExpenses.reduce((sum, exp) => sum + exp.amount, 0),
-    [filteredExpenses]
+    () => searchedExpenses.reduce((sum, exp) => sum + exp.amount, 0),
+    [searchedExpenses]
   )
 
   const monthlyTotal = useMemo(() => getMonthlyTotal(expenses), [expenses])
+  const pace = useMemo(() => getPaceStats(expenses), [expenses])
+  const monthTotals = useMemo(() => getCategoryMonthTotals(expenses), [expenses])
+  const recurring = useMemo(() => detectRecurring(expenses), [expenses])
 
   const budgetLimit = settings.budget || 0
   const budgetPercent =
@@ -80,6 +103,22 @@ function Dashboard({ onNavigate, onDeleteExpense }) {
       : budgetPercent > 75
       ? 'bg-orange-500'
       : 'bg-green-500'
+
+  const handleRepeat = useCallback(
+    (item) => {
+      setExpenses((prev) => [
+        {
+          id: generateId(),
+          amount: Math.round(item.avgAmount * 100) / 100,
+          note: item.note,
+          category: item.category,
+          date: new Date().toISOString(),
+        },
+        ...prev,
+      ])
+    },
+    [setExpenses]
+  )
 
   return (
     <div className="min-h-screen flex justify-center font-sans text-gray-900">
@@ -132,7 +171,7 @@ function Dashboard({ onNavigate, onDeleteExpense }) {
           </motion.div>
         </div>
 
-        {budgetLimit > 0 && (
+        {budgetLimit > 0 ? (
           <div className="px-6 mt-3">
             <motion.div
               initial={{ opacity: 0, y: 8 }}
@@ -155,6 +194,28 @@ function Dashboard({ onNavigate, onDeleteExpense }) {
               </span>
             </motion.div>
           </div>
+        ) : (
+          <div className="px-6 mt-3">
+            <button
+              onClick={() => onNavigate('setup')}
+              className="w-full bg-white rounded-full border border-dashed border-gray-200 px-4 py-2.5 flex items-center justify-between text-sm hover:border-gray-400 transition-colors"
+            >
+              <span className="font-medium text-gray-500">
+                Set a monthly limit to track what&apos;s left
+              </span>
+              <ArrowRight size={16} className="text-gray-400" />
+            </button>
+          </div>
+        )}
+
+        {budgetLimit > 0 && (
+          <div className="px-6">
+            <ProjectedBanner
+              projected={pace.projected}
+              budgetLimit={budgetLimit}
+             
+            />
+          </div>
         )}
 
         <div className="px-6 flex justify-center mt-6 relative z-10">
@@ -169,7 +230,7 @@ function Dashboard({ onNavigate, onDeleteExpense }) {
         </div>
 
         <div className="px-6 mt-12">
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-4">
             <Dropdown
               options={TIME_OPTIONS}
               value={timeframe}
@@ -183,11 +244,35 @@ function Dashboard({ onNavigate, onDeleteExpense }) {
             </div>
           </div>
 
+          <div className="relative mb-6">
+            <Search
+              size={16}
+              className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
+            />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search note, category, amount…"
+              className="w-full bg-white border border-gray-100 rounded-2xl pl-10 pr-4 py-3 text-sm outline-none focus:ring-2 focus:ring-gray-200 placeholder-gray-400"
+            />
+          </div>
+
           <div className="bg-white rounded-3xl shadow-sm border border-gray-100 min-h-[200px] overflow-hidden">
-            <ExpenseList expenses={filteredExpenses} onDelete={onDeleteExpense} />
+            <ExpenseList
+              expenses={searchedExpenses}
+             
+              onDelete={onDeleteExpense}
+              onEdit={onEditExpense}
+            />
           </div>
 
           <SpendingChart expenses={filteredExpenses} />
+          <CategoryBudgets
+            monthTotals={monthTotals}
+            limits={categoryLimits}
+          />
+          <RecurringCard items={recurring} onRepeat={handleRepeat} />
           <SpendingHeatmap expenses={expenses} />
         </div>
       </div>
@@ -195,30 +280,27 @@ function Dashboard({ onNavigate, onDeleteExpense }) {
   )
 }
 
-function AddExpense({ onNavigate }) {
-  const [, setExpenses] = useLocalStorage('syncSpend_expenses', [])
+function ExpenseForm({ onNavigate, initialExpense = null, onSubmitExpense }) {
+  const [amount, setAmount] = useState(
+    initialExpense ? String(initialExpense.amount) : ''
+  )
+  const [category, setCategory] = useState(
+    initialExpense ? normalizeCategory(initialExpense) : 'Other'
+  )
 
   const handleSubmit = useCallback(
     (e) => {
       e.preventDefault()
       const formData = new FormData(e.target)
-      const amount = parseFloat(formData.get('amount'))
+      const parsed = parseFloat(amount || formData.get('amount'))
       const note = formData.get('note')?.trim() || 'General'
 
-      if (amount && !isNaN(amount) && amount > 0) {
-        setExpenses((prev) => [
-          {
-            id: generateId(),
-            amount,
-            note,
-            date: new Date().toISOString(),
-          },
-          ...prev,
-        ])
+      if (parsed && !isNaN(parsed) && parsed > 0) {
+        onSubmitExpense({ amount: parsed, note, category })
         onNavigate('dashboard')
       }
     },
-    [onNavigate, setExpenses]
+    [onNavigate, onSubmitExpense, amount, category]
   )
 
   return (
@@ -233,7 +315,7 @@ function AddExpense({ onNavigate }) {
 
       <div className="flex-1 flex flex-col justify-center">
         <h2 className="text-3xl font-bold mb-8 text-center text-gray-900">
-          Add Expense
+          {initialExpense ? 'Edit Expense' : 'Add Expense'}
         </h2>
         <form onSubmit={handleSubmit} className="space-y-8">
           <div>
@@ -245,13 +327,53 @@ function AddExpense({ onNavigate }) {
               <input
                 type="number"
                 name="amount"
-                autoFocus
+                autoFocus={!initialExpense}
                 required
                 step="0.01"
                 min="0.01"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
                 className="text-6xl font-bold bg-transparent border-none outline-none w-full text-center placeholder-gray-200 text-gray-900"
                 placeholder="0.00"
               />
+            </div>
+            <div className="flex justify-center gap-2 mt-4">
+              {QUICK_AMOUNTS.map((q) => (
+                <button
+                  key={q}
+                  type="button"
+                  onClick={() => setAmount(String(q))}
+                  className={`px-4 py-2 rounded-full text-sm font-bold border transition-colors ${
+                    String(q) === String(amount)
+                      ? 'bg-gray-900 text-white border-gray-900'
+                      : 'bg-gray-50 text-gray-700 border-gray-100 hover:border-gray-300'
+                  }`}
+                >
+                  {formatCurrency(q)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-500 mb-3 text-center">
+              Category
+            </label>
+            <div className="flex flex-wrap justify-center gap-2">
+              {CATEGORIES.map((c) => (
+                <button
+                  key={c.value}
+                  type="button"
+                  onClick={() => setCategory(c.value)}
+                  className={`px-3 py-2 rounded-full text-sm font-medium border transition-colors ${
+                    category === c.value
+                      ? 'bg-gray-900 text-white border-gray-900'
+                      : 'bg-gray-50 text-gray-700 border-gray-100 hover:border-gray-300'
+                  }`}
+                >
+                  {c.icon} {c.label}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -262,6 +384,7 @@ function AddExpense({ onNavigate }) {
             <input
               type="text"
               name="note"
+              defaultValue={initialExpense?.note || ''}
               className="w-full text-center text-xl bg-gray-50 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-gray-200 text-gray-900 transition-shadow"
               placeholder="e.g. Chai, Lunch, Rent"
             />
@@ -272,7 +395,7 @@ function AddExpense({ onNavigate }) {
             type="submit"
             className="w-full bg-gray-900 text-white font-bold text-lg py-4 rounded-2xl shadow-lg mt-8 hover:bg-gray-800 transition-colors"
           >
-            Save Expense
+            {initialExpense ? 'Save Changes' : 'Save Expense'}
           </motion.button>
         </form>
       </div>
@@ -284,16 +407,26 @@ function Setup({ onNavigate }) {
   const [settings, setSettings] = useLocalStorage('syncSpend_settings', {
     budget: 0,
   })
+  const [expenses, setExpenses] = useLocalStorage('syncSpend_expenses', [])
   const [, , removeExpenses] = useLocalStorage('syncSpend_expenses', [])
   const [, , removeSettings] = useLocalStorage('syncSpend_settings', {})
   const [showConfirmClear, setShowConfirmClear] = useState(false)
+  const [restoreError, setRestoreError] = useState('')
+  const fileRef = useRef(null)
+
+  const categoryLimits = settings.categoryLimits || {}
 
   const handleSubmit = useCallback(
     (e) => {
       e.preventDefault()
       const formData = new FormData(e.target)
       const budget = parseFloat(formData.get('budget')) || 0
-      setSettings((prev) => ({ ...prev, budget }))
+      const limits = {}
+      CATEGORIES.forEach((c) => {
+        const v = parseFloat(formData.get(`limit_${c.value}`))
+        if (v && !isNaN(v) && v > 0) limits[c.value] = v
+      })
+      setSettings((prev) => ({ ...prev, budget, categoryLimits: limits }))
       onNavigate('dashboard')
     },
     [onNavigate, setSettings]
@@ -305,6 +438,39 @@ function Setup({ onNavigate }) {
     setShowConfirmClear(false)
     onNavigate('dashboard')
   }, [removeExpenses, removeSettings, onNavigate])
+
+  const handleExportCSV = useCallback(() => {
+    downloadFile(`expenses-${new Date().toISOString().slice(0, 10)}.csv`, toCSV(expenses), 'text/csv')
+  }, [expenses])
+
+  const handleBackup = useCallback(() => {
+    downloadFile(
+      `expense-tracker-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      JSON.stringify({ expenses, settings, exportedAt: new Date().toISOString() }, null, 2)
+    )
+  }, [expenses, settings])
+
+  const handleRestoreFile = useCallback(
+    (e) => {
+      const file = e.target.files?.[0]
+      if (!file) return
+      setRestoreError('')
+      const reader = new FileReader()
+      reader.onload = () => {
+        try {
+          const { expenses: clean, settings: parsed } = parseBackup(String(reader.result))
+          setExpenses(clean)
+          setSettings((prev) => ({ ...prev, ...parsed }))
+          onNavigate('dashboard')
+        } catch (err) {
+          setRestoreError(err.message || 'Could not read backup file.')
+        }
+      }
+      reader.readAsText(file)
+      e.target.value = ''
+    },
+    [onNavigate, setExpenses, setSettings]
+  )
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col p-6 max-w-md mx-auto relative">
@@ -351,7 +517,75 @@ function Setup({ onNavigate }) {
               />
             </div>
             <p className="text-xs text-gray-400 mt-2">
-              We'll warn you when you approach this.
+              We&apos;ll warn you when you approach this.
+            </p>
+          </div>
+
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+            <label className="block text-sm font-medium text-gray-500 mb-1">
+              Category limits <span className="text-gray-400">(optional)</span>
+            </label>
+            <p className="text-xs text-gray-400 mb-4">
+              Get per-category bars on the dashboard.
+            </p>
+            <div className="space-y-3">
+              {CATEGORIES.filter((c) => c.value !== 'Other').map((c) => (
+                <div key={c.value} className="flex items-center gap-3">
+                  <span className="w-28 text-sm font-medium shrink-0">
+                    {c.icon} {c.label}
+                  </span>
+                  <input
+                    type="number"
+                    name={`limit_${c.value}`}
+                    min="0"
+                    defaultValue={categoryLimits[c.value] || ''}
+                    placeholder="No limit"
+                    className="flex-1 bg-gray-50 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-200"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+            <label className="block text-sm font-medium text-gray-500 mb-4">
+              Your data <span className="text-gray-400">({expenses.length} expenses)</span>
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={handleExportCSV}
+                className="bg-gray-50 font-bold py-3 rounded-2xl text-sm hover:bg-gray-100 transition-colors border border-gray-100"
+              >
+                ⬇ CSV
+              </button>
+              <button
+                type="button"
+                onClick={handleBackup}
+                className="bg-gray-50 font-bold py-3 rounded-2xl text-sm hover:bg-gray-100 transition-colors border border-gray-100"
+              >
+                ⤓ Backup
+              </button>
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="bg-gray-50 font-bold py-3 rounded-2xl text-sm hover:bg-gray-100 transition-colors border border-gray-100"
+              >
+                ⤒ Restore
+              </button>
+            </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleRestoreFile}
+            />
+            {restoreError && (
+              <p className="text-xs text-red-500 mt-2">{restoreError}</p>
+            )}
+            <p className="text-xs text-gray-400 mt-2">
+              Back up regularly — expenses live only in this browser.
             </p>
           </div>
 
@@ -379,37 +613,141 @@ function Setup({ onNavigate }) {
 export default function App() {
   const [view, setView] = useState('dashboard')
   const [direction, setDirection] = useState(0)
-  const [, setExpenses] = useLocalStorage('syncSpend_expenses', [])
+  const [expenses, setExpenses] = useLocalStorage('syncSpend_expenses', [])
+  const [editingId, setEditingId] = useState(null)
+  const [lastDeleted, setLastDeleted] = useState(null)
+  const undoTimer = useRef(null)
 
   const handleNavigate = useCallback((targetView) => {
-    const viewOrder = ['dashboard', 'add', 'setup']
-    const currentIndex = viewOrder.indexOf(view)
-    const targetIndex = viewOrder.indexOf(targetView)
-    setDirection(targetIndex > currentIndex ? 1 : -1)
-    setView(targetView)
-  }, [view])
+    const viewOrder = ['dashboard', 'add', 'edit', 'setup']
+    setView((current) => {
+      const currentIndex = viewOrder.indexOf(current)
+      const targetIndex = viewOrder.indexOf(targetView)
+      setDirection(targetIndex > currentIndex ? 1 : -1)
+      if (targetView !== 'edit') setEditingId(null)
+      return targetView
+    })
+  }, [])
 
   const handleDeleteExpense = useCallback((id) => {
-    setExpenses((prev) => prev.filter((e) => e.id !== id))
+    setExpenses((prev) => {
+      const found = prev.find((e) => e.id === id)
+      if (found) {
+        if (undoTimer.current) clearTimeout(undoTimer.current)
+        setLastDeleted({ expense: found })
+        undoTimer.current = setTimeout(() => setLastDeleted(null), 5000)
+      }
+      return prev.filter((e) => e.id !== id)
+    })
   }, [setExpenses])
 
+  const handleUndoDelete = useCallback(() => {
+    if (undoTimer.current) clearTimeout(undoTimer.current)
+    setLastDeleted((deleted) => {
+      if (deleted?.expense) {
+        setExpenses((prev) => {
+          if (prev.some((e) => e.id === deleted.expense.id)) return prev
+          return [deleted.expense, ...prev]
+        })
+      }
+      return null
+    })
+  }, [setExpenses])
+
+  useEffect(() => {
+    return () => {
+      if (undoTimer.current) clearTimeout(undoTimer.current)
+    }
+  }, [])
+
+  const handleEditExpense = useCallback((expense) => {
+    setEditingId(expense.id)
+    setView((current) => {
+      const viewOrder = ['dashboard', 'add', 'edit', 'setup']
+      setDirection(viewOrder.indexOf('edit') > viewOrder.indexOf(current) ? 1 : -1)
+      return 'edit'
+    })
+  }, [])
+
+  const handleAddSubmit = useCallback((data) => {
+    setExpenses((prev) => [
+      {
+        id: generateId(),
+        amount: data.amount,
+        note: data.note,
+        category: data.category || 'Other',
+        date: new Date().toISOString(),
+      },
+      ...prev,
+    ])
+  }, [setExpenses])
+
+  const handleEditSubmit = useCallback((data) => {
+    setExpenses((prev) =>
+      prev.map((e) =>
+        e.id === editingId
+          ? { ...e, amount: data.amount, note: data.note, category: data.category || 'Other' }
+          : e
+      )
+    )
+    setEditingId(null)
+  }, [setExpenses, editingId])
+
+  const editingExpense = editingId ? expenses.find((e) => e.id === editingId) : null
+
   return (
-    <AnimatePresence mode="wait" custom={direction}>
-      <motion.div
-        key={view}
-        custom={direction}
-        variants={slideVariants}
-        initial="enter"
-        animate="center"
-        exit="exit"
-        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-      >
-        {view === 'dashboard' && (
-          <Dashboard onNavigate={handleNavigate} onDeleteExpense={handleDeleteExpense} />
+    <>
+      <AnimatePresence mode="wait" custom={direction}>
+        <motion.div
+          key={view}
+          custom={direction}
+          variants={slideVariants}
+          initial="enter"
+          animate="center"
+          exit="exit"
+          transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+        >
+          {view === 'dashboard' && (
+            <Dashboard
+              onNavigate={handleNavigate}
+              onDeleteExpense={handleDeleteExpense}
+              onEditExpense={handleEditExpense}
+            />
+          )}
+          {view === 'add' && (
+            <ExpenseForm onNavigate={handleNavigate} onSubmitExpense={handleAddSubmit} />
+          )}
+          {view === 'edit' && editingExpense && (
+            <ExpenseForm
+              onNavigate={handleNavigate}
+              initialExpense={editingExpense}
+              onSubmitExpense={handleEditSubmit}
+            />
+          )}
+          {view === 'setup' && <Setup onNavigate={handleNavigate} />}
+        </motion.div>
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {lastDeleted && (
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 24 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white rounded-full pl-5 pr-2 py-2 flex items-center gap-4 shadow-2xl text-sm"
+          >
+            <span className="whitespace-nowrap">
+              Deleted {formatCurrency(lastDeleted.expense.amount)} • {lastDeleted.expense.note}
+            </span>
+            <button
+              onClick={handleUndoDelete}
+              className="flex items-center gap-1 bg-white text-gray-900 font-bold px-4 py-2 rounded-full hover:bg-gray-100 transition-colors"
+            >
+              <Undo2 size={14} /> Undo
+            </button>
+          </motion.div>
         )}
-        {view === 'add' && <AddExpense onNavigate={handleNavigate} />}
-        {view === 'setup' && <Setup onNavigate={handleNavigate} />}
-      </motion.div>
-    </AnimatePresence>
+      </AnimatePresence>
+    </>
   )
 }

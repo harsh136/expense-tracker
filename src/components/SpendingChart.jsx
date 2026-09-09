@@ -9,7 +9,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts'
-import { formatCurrency, getCategoryData, COLORS } from '../utils/helpers'
+import { formatCurrency, getCategoryData, COLORS, categoryMeta } from '../utils/helpers'
 import { motion } from 'framer-motion'
 
 const CustomTooltip = ({ active, payload }) => {
@@ -52,10 +52,16 @@ export default function SpendingChart({ expenses }) {
               axisLine={false}
               tickLine={false}
             />
-            <Tooltip content={<CustomTooltip />} cursor={{ fill: '#f9fafb' }} />
+            <Tooltip
+              content={<CustomTooltip />}
+              cursor={{ fill: '#f9fafb' }}
+            />
             <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={20}>
               {data.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                <Cell
+                  key={`cell-${index}`}
+                  fill={categoryMeta(entry.name).color || COLORS[index % COLORS.length]}
+                />
               ))}
             </Bar>
           </BarChart>

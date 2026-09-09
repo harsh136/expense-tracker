@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { formatCurrency, getDailySpendingData } from '../utils/helpers'
+import { getDailySpendingData } from '../utils/helpers'
 import { motion } from 'framer-motion'
 
 const LEVEL_COLORS = [
